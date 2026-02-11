@@ -59,21 +59,13 @@ func (fc *FileCache) SetupScheduler() error {
 		return nil
 	}
 
-	// Setup the cron scheduler
-	cronScheduler := cron.New(cron.WithSeconds())
-	fc.scheduleUploads(cronScheduler, fc.schedule)
-	cronScheduler.Start()
+	// Setup the cron scheduler and store it for proper cleanup in Stop()
+	fc.cronScheduler = cron.New(cron.WithSeconds())
+	fc.scheduleUploads(fc.cronScheduler, fc.schedule)
+	fc.cronScheduler.Start()
 
 	log.Info("FileCache::SetupScheduler : Scheduler started successfully")
 	return nil
-}
-
-func isValidCronExpression(expr string) bool {
-	parser := cron.MustNewParser(
-		cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
-	)
-	_, err := parser.Parse(expr)
-	return err == nil
 }
 
 func (fc *FileCache) scheduleUploads(c *cron.Cron, sched WeeklySchedule) {

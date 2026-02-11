@@ -45,6 +45,7 @@ import (
 	"github.com/Seagate/cloudfuse/internal"
 	"github.com/Seagate/cloudfuse/internal/handlemap"
 	"github.com/Seagate/cloudfuse/internal/stats_manager"
+	"github.com/netresearch/go-cron"
 )
 
 // Common structure for Component
@@ -79,6 +80,7 @@ type FileCache struct {
 
 	stopAsyncUpload    chan struct{}
 	schedule           WeeklySchedule
+	cronScheduler      *cron.Cron // stored to enable Stop() cleanup and prevent goroutine leak
 	uploadNotifyCh     chan struct{}
 	alwaysOn           bool
 	activeWindows      int
@@ -192,6 +194,13 @@ func (fc *FileCache) Start(ctx context.Context) error {
 // Stop : Stop the component functionality and kill all threads started
 func (fc *FileCache) Stop() error {
 	log.Trace("Stopping component : %s", fc.Name())
+
+	// Stop the cron scheduler to prevent goroutine leak
+	if fc.cronScheduler != nil {
+		log.Info("FileCache::Stop : Stopping cron scheduler")
+		fc.cronScheduler.Stop()
+		fc.cronScheduler = nil
+	}
 
 	// Wait for all async upload to complete if any
 	if fc.lazyWrite {
@@ -383,11 +392,12 @@ func (fc *FileCache) Configure(_ bool) error {
 				if durStr, ok := rawWindow["duration"].(string); ok {
 					window.Duration = durStr
 				}
-				if !isValidCronExpression(window.CronExpr) {
+				if err := cron.ValidateSpec(window.CronExpr, cron.Second|cron.Minute|cron.Hour|cron.Dom|cron.Month|cron.Dow|cron.Descriptor); err != nil {
 					log.Err(
-						"FileCache::Configure : Invalid cron expression '%s' for schedule window '%s', skipping",
+						"FileCache::Configure : Invalid cron expression '%s' for schedule window '%s': %v, skipping",
 						window.CronExpr,
 						window.Name,
+						err,
 					)
 					continue
 				}
