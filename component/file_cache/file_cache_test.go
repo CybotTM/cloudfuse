@@ -2997,6 +2997,61 @@ func (suite *fileCacheTestSuite) TestHardLimit() {
 	suite.assert.Equal(syscall.ENOSPC, err)
 }
 
+// TestStopCleansCronScheduler verifies that Stop() properly shuts down the cron
+// scheduler and clears the reference, preventing goroutine leaks.
+func (suite *fileCacheTestSuite) TestStopCleansCronScheduler() {
+	suite.cleanupTest() // teardown the default file cache
+
+	now := time.Now()
+	second := (now.Second() + 5) % 60
+	cronExpr := fmt.Sprintf("%d * * * * *", second)
+
+	configContent := fmt.Sprintf(`file_cache:
+  path: %s
+  offload-io: true
+  create-empty-file: false
+  schedule:
+    - name: "TestWindow"
+      cron: "%s"
+      duration: "5s"
+
+loopbackfs:
+  path: %s`,
+		suite.cache_path,
+		cronExpr,
+		suite.fake_storage_path,
+	)
+	suite.setupTestHelper(configContent)
+
+	// Verify scheduler was created
+	suite.assert.NotNil(suite.fileCache.cronScheduler, "Cron scheduler should be initialized after Start")
+
+	// Stop the file cache (this is the full Stop including policy shutdown)
+	err := suite.fileCache.Stop()
+	suite.assert.NoError(err)
+
+	// Verify scheduler reference is cleared
+	suite.assert.Nil(suite.fileCache.cronScheduler, "Cron scheduler should be nil after Stop")
+
+	// Clean up temp directories
+	os.RemoveAll(suite.cache_path)
+	os.RemoveAll(suite.fake_storage_path)
+
+	// Re-setup for the deferred cleanupTest
+	suite.setupTestHelper(configContent)
+	defer suite.cleanupTest()
+}
+
+// TestStopWithoutSchedulerNoPanic verifies that Stop() works correctly when
+// no cron scheduler was configured (always-on mode).
+func (suite *fileCacheTestSuite) TestStopWithoutSchedulerNoPanic() {
+	defer suite.cleanupTest()
+
+	// Default setup has no schedule configured, so cronScheduler should be nil
+	suite.assert.Nil(suite.fileCache.cronScheduler, "Cron scheduler should be nil in always-on mode")
+	suite.assert.True(suite.fileCache.alwaysOn, "Should be in always-on mode with no schedule")
+}
+
 // In order for 'go test' to run this suite, we need to create
 // a normal test function and pass our suite to suite.Run
 func TestFileCacheTestSuite(t *testing.T) {
